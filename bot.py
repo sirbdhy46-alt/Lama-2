@@ -173,7 +173,9 @@ async def _scrape_youtube_ids(query: str, max_results: int = 1) -> list[str]:
                 timeout=aiohttp.ClientTimeout(total=10),
             ) as resp:
                 html = await resp.text()
-                ids = _re.findall(r'"videoId":"([a-zA-Z0-9_-]{11})"', html)
+                ids = list(dict.fromkeys(
+    _re.findall(r"(?:watch\\?v=|\"videoId\":\")([a-zA-Z0-9_-]{11})", html)
+))
                 seen: list[str] = []
                 for vid_id in ids:
                     if vid_id not in seen:
