@@ -154,7 +154,9 @@ _COOKIE_FILE = _setup_cookies()
 # Fix: use the "ios" client which hits a different API endpoint and is not
 # subject to the same IP-based format restrictions. Also use "bestaudio/best"
 # (no container filter) and check_formats=False so yt-dlp never rejects a
-# format that the server claims is available _ytdl_base: dict = {
+# format that the server claims is available.
+
+_ytdl_base: dict = {
     "format": "bestaudio[ext=webm]/bestaudio[ext=opus]/bestaudio[ext=m4a]/bestaudio/best",
     "noplaylist": True,
     "quiet": True,
@@ -177,6 +179,7 @@ _COOKIE_FILE = _setup_cookies()
         "Accept-Language": "en-US,en;q=0.9",
     },
 }
+
 if _COOKIE_FILE:
     _ytdl_base["cookiefile"] = _COOKIE_FILE
 
