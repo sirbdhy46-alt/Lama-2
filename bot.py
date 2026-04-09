@@ -87,7 +87,7 @@ class GuildMusicState:
         self.lonely_task: asyncio.Task | None = None
 
 guild_states: dict[int, GuildMusicState] = {}
-
+ju
 def get_state(guild_id: int) -> GuildMusicState:
     if guild_id not in guild_states:
         guild_states[guild_id] = GuildMusicState()
@@ -125,12 +125,15 @@ def _setup_cookies() -> str | None:
 _COOKIE_FILE = _setup_cookies()
 
 # ─── YTDLP / YouTube config ───────────────────────────────────────────────
-# FIX: Use permissive format string that works on cloud IPs with cookies.
-# The old "bestaudio[ext=webm]/bestaudio[ext=m4a]/bestaudio/best" fails on
-# Railway because YouTube restricts certain containers by server IP/region.
+# Railway is a datacenter IP. Even with cookies, the YouTube "web" client
+# returns a restricted format manifest for datacenter IPs.
+# Fix: use the "ios" client which hits a different API endpoint and is not
+# subject to the same IP-based format restrictions. Also use "bestaudio/best"
+# (no container filter) and check_formats=False so yt-dlp never rejects a
+# format that the server claims is available.
 
 _ytdl_base: dict = {
-    "format": "bestaudio[acodec!=none]/bestaudio/best",
+    "format": "bestaudio/best",
     "noplaylist": True,
     "quiet": True,
     "no_warnings": True,
@@ -138,11 +141,12 @@ _ytdl_base: dict = {
     "source_address": "0.0.0.0",
     "extract_flat": False,
     "prefer_free_formats": True,
+    "check_formats": False,
     "extractor_args": {
         "youtube": {
-            # With cookies: "web" has full format access.
-            # Without cookies: "ios" client bypasses many IP restrictions better than tv_embedded.
-            "player_client": ["web"] if _COOKIE_FILE else ["ios", "mweb", "web"],
+            # ios client bypasses Railway/datacenter IP format restrictions.
+            # It uses a different API endpoint than web/tv_embedded.
+            "player_client": ["ios", "mweb"],
         }
     },
     "http_headers": {
