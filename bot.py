@@ -157,7 +157,7 @@ _COOKIE_FILE = _setup_cookies()
 # format that the server claims is available.
 
 _ytdl_base: dict = {
-    "format": "bestaudio/best",
+    "format": "bestaudio[protocol^=http][abr>0]/bestaudio[protocol^=http]/bestaudio/best",
     "noplaylist": True,
     "quiet": True,
     "no_warnings": True,
@@ -168,14 +168,11 @@ _ytdl_base: dict = {
     "check_formats": False,
     "extractor_args": {
         "youtube": {
-            # android_music is an audio-only client with its own API endpoint.
-            # It is not subject to Railway/datacenter IP format restrictions
-            # and is not rate-limited like the ios client on shared server IPs.
-            "player_client": ["android_music", "android", "ios"],
+            "player_client": ["mweb", "web_creator", "android_music", "android"],
         }
     },
     "http_headers": {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        "User-Agent": "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.6367.82 Mobile Safari/537.36",
     },
 }
 
