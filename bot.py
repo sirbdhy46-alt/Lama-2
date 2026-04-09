@@ -156,7 +156,7 @@ _COOKIE_FILE = _setup_cookies()
 # (no container filter) and check_formats=False so yt-dlp never rejects a
 # format that the server claims is available
 
-_ytdl_base: dict = {
+    _ytdl_base: dict = {
     "format": "bestaudio[ext=webm]/bestaudio[ext=opus]/bestaudio[ext=m4a]/bestaudio/best",
     "noplaylist": True,
     "quiet": True,
@@ -170,8 +170,7 @@ _ytdl_base: dict = {
     "geo_bypass": True,
     "extractor_args": {
         "youtube": {
-            "player_client": ["tv_embedded"],
-            "player_skip": ["webpage", "configs", "js"],
+            "player_client": ["tv_embedded", "android_music"],
             "skip": ["dash", "hls"],
         }
     },
