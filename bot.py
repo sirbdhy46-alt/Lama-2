@@ -567,7 +567,7 @@ async def play_next(guild_id: int):
         return
 
     page_url = track.get("webpage_url") or track.get("url", "")
-    fresh = await fetch_track(page_url) if page_url else None
+    fresh = await fetch_track(page_url, fallback_title=track.get("title")) if page_url else None
     if not fresh:
         if state.text_channel:
             await state.text_channel.send(embed=embed("⚠️ Skipped", f"Could not stream **{track.get('title', '?')}**", "warn"))
