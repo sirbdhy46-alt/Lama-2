@@ -375,7 +375,7 @@ async def fetch_track(query: str) -> dict | None:
             yt_query = f"https://www.youtube.com/watch?v={ids[0]}"
         else:
             print(f"[scrape] no YouTube results for: {query} — trying SoundCloud")
-            return await fetch_track_soundcloud(query)
+            return await fetch_track_soundcloud(fallback_title or query)
 
     with yt_dlp.YoutubeDL(opts) as ydl:
         try:
@@ -384,7 +384,7 @@ async def fetch_track(query: str) -> dict | None:
             )
         except Exception as e:
             print(f"[yt-dlp] fetch error: {e} — falling back to SoundCloud")
-            return await fetch_track_soundcloud(query)
+            return await fetch_track_soundcloud(fallback_title or query)
 
     if not info:
         return await fetch_track_soundcloud(fallback_title or query)
