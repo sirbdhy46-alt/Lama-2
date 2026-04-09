@@ -30,11 +30,17 @@ if "--prefix" in sys.argv:
 def load_opus():
     if discord.opus.is_loaded():
         return
-    # Try common paths on Railway/Ubuntu (apt libopus0)
+
+    import glob as _glob
+
+    # 1. Known fixed paths (apt libopus0 on Ubuntu/Railway)
     opus_names = [
         "libopus.so.0",
         "/usr/lib/x86_64-linux-gnu/libopus.so.0",
         "/usr/lib/aarch64-linux-gnu/libopus.so.0",
+        "/usr/lib/arm-linux-gnueabihf/libopus.so.0",
+        "/usr/local/lib/libopus.so.0",
+        "/usr/lib/libopus.so.0",
         "libopus.so",
         "libopus",
         "opus",
@@ -46,7 +52,8 @@ def load_opus():
             return
         except OSError:
             continue
-    # try ctypes discovery
+
+    # 2. ctypes discovery (works if library is in ldconfig cache)
     lib = ctypes.util.find_library("opus")
     if lib:
         try:
@@ -55,6 +62,23 @@ def load_opus():
             return
         except OSError:
             pass
+
+    # 3. Glob search — finds opus anywhere on the system, including Nix store
+    patterns = [
+        "/usr/lib/**/libopus.so*",
+        "/usr/local/lib/**/libopus.so*",
+        "/nix/store/**/libopus.so*",
+        "/lib/**/libopus.so*",
+    ]
+    for pattern in patterns:
+        for match in sorted(_glob.glob(pattern, recursive=True)):
+            try:
+                discord.opus.load_opus(match)
+                print(f"[Opus] Loaded via glob: {match}")
+                return
+            except OSError:
+                continue
+
     print("[Opus] WARNING: Could not load Opus — voice will not work!")
 
 load_opus()
@@ -144,9 +168,10 @@ _ytdl_base: dict = {
     "check_formats": False,
     "extractor_args": {
         "youtube": {
-            # ios client bypasses Railway/datacenter IP format restrictions.
-            # It uses a different API endpoint than web/tv_embedded.
-            "player_client": ["ios", "mweb"],
+            # android_music is an audio-only client with its own API endpoint.
+            # It is not subject to Railway/datacenter IP format restrictions
+            # and is not rate-limited like the ios client on shared server IPs.
+            "player_client": ["android_music", "android", "ios"],
         }
     },
     "http_headers": {
