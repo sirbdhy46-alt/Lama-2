@@ -30,7 +30,15 @@ if "--prefix" in sys.argv:
 def load_opus():
     if discord.opus.is_loaded():
         return
-    opus_names = ["libopus.so.0", "libopus.so", "libopus", "opus"]
+    # Try common paths on Railway/Ubuntu (apt libopus0)
+    opus_names = [
+        "libopus.so.0",
+        "/usr/lib/x86_64-linux-gnu/libopus.so.0",
+        "/usr/lib/aarch64-linux-gnu/libopus.so.0",
+        "libopus.so",
+        "libopus",
+        "opus",
+    ]
     for name in opus_names:
         try:
             discord.opus.load_opus(name)
@@ -71,12 +79,12 @@ class GuildMusicState:
         self.voice_client: discord.VoiceClient | None = None
         self.text_channel: discord.TextChannel | None = None
         self.skip_votes = set()
-        self.audio_filter = "off"       # off | bass | nightcore | vaporwave | 8d | slowed
-        self.history: deque = deque(maxlen=20)   # last 20 played tracks
-        self.stay_247 = False           # stay in voice when empty
-        self.autoplay = False           # auto-queue related songs
+        self.audio_filter = "off"
+        self.history: deque = deque(maxlen=20)
+        self.stay_247 = False
+        self.autoplay = False
         self.track_start_time: float = 0.0
-        self.lonely_task: asyncio.Task | None = None  # auto-leave countdown
+        self.lonely_task: asyncio.Task | None = None
 
 guild_states: dict[int, GuildMusicState] = {}
 
@@ -86,8 +94,6 @@ def get_state(guild_id: int) -> GuildMusicState:
     return guild_states[guild_id]
 
 # ─── YouTube cookies support ─────────────────────────────────────────────
-# Set YOUTUBE_COOKIES env var to the contents of a Netscape-format cookies.txt
-# exported from your browser. This bypasses ALL IP-based YouTube restrictions.
 
 import tempfile as _tempfile
 import base64 as _base64
@@ -95,12 +101,10 @@ import base64 as _base64
 _COOKIE_FILE: str | None = None
 
 def _setup_cookies() -> str | None:
-    """Write YOUTUBE_COOKIES env var to a temp file and return its path."""
     raw = os.getenv("YOUTUBE_COOKIES", "").strip()
     if not raw:
         return None
     try:
-        # Accept both plain text and base64-encoded cookies
         try:
             decoded = _base64.b64decode(raw).decode("utf-8")
         except Exception:
@@ -121,20 +125,24 @@ def _setup_cookies() -> str | None:
 _COOKIE_FILE = _setup_cookies()
 
 # ─── YTDLP / YouTube config ───────────────────────────────────────────────
+# FIX: Use permissive format string that works on cloud IPs with cookies.
+# The old "bestaudio[ext=webm]/bestaudio[ext=m4a]/bestaudio/best" fails on
+# Railway because YouTube restricts certain containers by server IP/region.
 
 _ytdl_base: dict = {
-    "format": "bestaudio[ext=webm]/bestaudio[ext=m4a]/bestaudio/best",
+    "format": "bestaudio[acodec!=none]/bestaudio/best",
     "noplaylist": True,
     "quiet": True,
     "no_warnings": True,
     "default_search": "ytsearch",
     "source_address": "0.0.0.0",
     "extract_flat": False,
+    "prefer_free_formats": True,
     "extractor_args": {
         "youtube": {
-            # With cookies: web client has full format access and works on any IP.
-            # Without cookies: tv_embedded bypasses some IP blocks but has fewer formats.
-            "player_client": ["web"] if _COOKIE_FILE else ["tv_embedded", "web"],
+            # With cookies: "web" has full format access.
+            # Without cookies: "ios" client bypasses many IP restrictions better than tv_embedded.
+            "player_client": ["web"] if _COOKIE_FILE else ["ios", "mweb", "web"],
         }
     },
     "http_headers": {
@@ -147,10 +155,12 @@ if _COOKIE_FILE:
 
 YTDL_OPTS = _ytdl_base
 
+# FIX: Removed -b:a 192k — forcing a specific bitrate can cause FFmpeg to
+# fail or stutter when the stream's native bitrate doesn't match.
 FFMPEG_BASE_BEFORE = "-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5"
 FFMPEG_OPTS = {
     "before_options": FFMPEG_BASE_BEFORE,
-    "options": "-vn -b:a 192k -ar 48000",  # 192kbps, 48kHz — Discord premium quality
+    "options": "-vn -ar 48000",
 }
 
 # ─── Audio filter presets ──────────────────────────────────────────────────
@@ -171,9 +181,8 @@ AUDIO_FILTERS = {
 }
 
 def build_ffmpeg_opts(audio_filter: str) -> dict:
-    """Build FFmpeg options with the given audio filter applied."""
     af = AUDIO_FILTERS.get(audio_filter, AUDIO_FILTERS["off"])["af"]
-    options = "-vn -b:a 192k -ar 48000"
+    options = "-vn -ar 48000"
     if af:
         options += f" -af \"{af}\""
     return {
@@ -183,16 +192,13 @@ def build_ffmpeg_opts(audio_filter: str) -> dict:
 
 
 def get_stream_url(info: dict) -> str:
-    """Extract the best streamable audio URL from yt-dlp info."""
-    # Use the top-level url which yt-dlp sets to the best selected format
     url = info.get("url", "")
     if url:
         print(f"[Stream] URL: {url[:80]}")
         return url
-    # fallback: scan formats
     formats = info.get("formats") or []
     if formats:
-        best = formats[-1]  # yt-dlp sorts formats best-last
+        best = formats[-1]
         return best.get("url", "")
     return ""
 
@@ -205,7 +211,6 @@ _YT_SEARCH_HEADERS = {
 }
 
 async def _search_with_ytdlp(query: str, max_results: int) -> list[str]:
-    """Use yt-dlp ytsearch — reliable when cookies are set, works on any server IP."""
     opts = {
         **YTDL_OPTS,
         "extract_flat": True,
@@ -228,7 +233,6 @@ async def _search_with_ytdlp(query: str, max_results: int) -> list[str]:
 
 
 async def _search_with_scrape(query: str, max_results: int) -> list[str]:
-    """Scrape YouTube search page — works when server IP isn't blocked."""
     try:
         async with aiohttp.ClientSession(headers=_YT_SEARCH_HEADERS) as session:
             async with session.get(
@@ -254,38 +258,30 @@ async def _search_with_scrape(query: str, max_results: int) -> list[str]:
 
 
 async def _scrape_youtube_ids(query: str, max_results: int = 1) -> list[str]:
-    """Get YouTube video IDs. Uses cookies+yt-dlp when available (works on any IP),
-    otherwise falls back to HTML scraping."""
-    # With cookies: yt-dlp ytsearch is authenticated → works on Railway, Replit, etc.
     if _COOKIE_FILE:
         ids = await _search_with_ytdlp(query, max_results)
         if ids:
             print(f"[search] Found via yt-dlp+cookies: {ids[0]}")
             return ids
 
-    # Without cookies: try scraping YouTube search page directly
     ids = await _search_with_scrape(query, max_results)
     if ids:
         return ids
 
-    # Last resort: try yt-dlp ytsearch without cookies (may work on some IPs)
     if not _COOKIE_FILE:
         ids = await _search_with_ytdlp(query, max_results)
         if ids:
             print(f"[search] Found via yt-dlp (no cookies): {ids[0]}")
             return ids
 
-    print(f"[search] All methods failed for: {query!r} — set YOUTUBE_COOKIES env var to fix")
+    print(f"[search] All methods failed for: {query!r}")
     return []
 
 
 async def fetch_track(query: str) -> dict | None:
-    """Fetch a single track's full info including stream URL."""
     loop = asyncio.get_running_loop()
     opts = {**YTDL_OPTS, "noplaylist": True}
 
-    # For text searches: scrape YouTube to get the video URL first,
-    # then pass the direct URL to yt-dlp (avoids ytsearch rate-limits).
     if not query.startswith("http"):
         ids = await _scrape_youtube_ids(query, max_results=1)
         if not ids:
@@ -310,9 +306,7 @@ async def fetch_track(query: str) -> dict | None:
 
 
 async def search_youtube(query: str, max_results: int = 5) -> list[dict]:
-    """Search YouTube and return lightweight track metadata."""
     if query.startswith("http"):
-        # Direct URL — just return minimal metadata
         loop = asyncio.get_running_loop()
         opts = {**YTDL_OPTS, "extract_flat": True}
         with yt_dlp.YoutubeDL(opts) as ydl:
@@ -329,13 +323,12 @@ async def search_youtube(query: str, max_results: int = 5) -> list[dict]:
             return [e for e in info["entries"] if e][:max_results]
         return [info]
 
-    # Text search: scrape YouTube for video IDs
     ids = await _scrape_youtube_ids(query, max_results=max_results)
     results = []
     for vid_id in ids:
         results.append({
             "id": vid_id,
-            "title": vid_id,  # title will be resolved on play
+            "title": vid_id,
             "webpage_url": f"https://www.youtube.com/watch?v={vid_id}",
             "url": f"https://www.youtube.com/watch?v={vid_id}",
         })
@@ -364,7 +357,6 @@ def embed(title: str, description: str = "", color_key: str = "main") -> discord
     return e
 
 def make_progress_bar(elapsed: float, total: float, length: int = 15) -> str:
-    """Build a visual progress bar like ━━━━●──────── 1:23 / 3:45"""
     if total <= 0:
         return ""
     ratio = min(elapsed / total, 1.0)
@@ -403,22 +395,19 @@ def track_embed(track: dict, state: GuildMusicState, label: str = "🎵 Now Play
     e.add_field(name="📡 Mode",    value=mode_str,                                  inline=True)
     if thumbnail:
         e.set_thumbnail(url=thumbnail)
-    e.set_footer(text="✨ Premium Music • 192kbps • 48kHz")
+    e.set_footer(text="✨ Premium Music • 48kHz")
     return e
 
 
 # ─── Voice connection helper ─────────────────────────────────────────────────
 
 async def safe_connect(channel: discord.VoiceChannel, state: GuildMusicState, status_msg=None) -> bool:
-    """Connect to voice with retries. Returns True on success."""
-    # Already connected
     if state.voice_client and state.voice_client.is_connected():
         if state.voice_client.channel != channel:
             await state.voice_client.move_to(channel)
         return True
 
     for attempt in range(1, 6):
-        # force-clean any stale client
         if state.voice_client:
             try:
                 await state.voice_client.disconnect(force=True)
@@ -452,7 +441,6 @@ async def play_next(guild_id: int):
     if not vc or not vc.is_connected():
         return
 
-    # loop track
     if state.loop_mode == "track" and state.current:
         track = state.current
     elif state.queue:
@@ -461,13 +449,11 @@ async def play_next(guild_id: int):
             state.queue.append(state.current)
         state.current = track
     else:
-        # Autoplay: search for a related song based on last played
         if state.autoplay and state.history:
             last = state.history[-1]
             search_q = f"{last.get('uploader', '')} {last.get('title', '')} mix"
             try:
                 results = await search_youtube(search_q, max_results=5)
-                # pick one that's not already in history
                 history_urls = {t.get("webpage_url") or t.get("url") for t in state.history}
                 picked = next((r for r in results if (r.get("webpage_url") or r.get("url")) not in history_urls), None)
                 if picked:
@@ -491,7 +477,6 @@ async def play_next(guild_id: int):
         ))
         return
 
-    # always re-fetch full track info to get a fresh stream URL
     page_url = track.get("webpage_url") or track.get("url", "")
     fresh = await fetch_track(page_url) if page_url else None
     if not fresh:
@@ -521,7 +506,6 @@ async def play_next(guild_id: int):
     vc.play(source, after=after_playing)
     state.skip_votes.clear()
 
-    # Update presence to show current song
     title_short = fresh.get("title", "music")[:40]
     asyncio.run_coroutine_threadsafe(
         bot.change_presence(activity=discord.Activity(
@@ -559,7 +543,6 @@ async def on_command_error(ctx: commands.Context, error):
 
 @bot.event
 async def on_voice_state_update(member: discord.Member, before: discord.VoiceState, after: discord.VoiceState):
-    """Auto-leave when everyone leaves; restore presence after track ends."""
     guild = member.guild
     state = get_state(guild.id)
     vc = state.voice_client
@@ -567,16 +550,14 @@ async def on_voice_state_update(member: discord.Member, before: discord.VoiceSta
     if not vc or not vc.is_connected():
         return
 
-    # Don't count bots
     real_members = [m for m in vc.channel.members if not m.bot]
 
     if len(real_members) == 0 and not state.stay_247:
-        # Cancel any existing lonely task
         if state.lonely_task and not state.lonely_task.done():
             state.lonely_task.cancel()
 
         async def auto_leave():
-            await asyncio.sleep(180)  # 3 min grace period
+            await asyncio.sleep(180)
             if vc.is_connected():
                 re_check = [m for m in vc.channel.members if not m.bot]
                 if len(re_check) == 0:
@@ -597,7 +578,6 @@ async def on_voice_state_update(member: discord.Member, before: discord.VoiceSta
         state.lonely_task = asyncio.create_task(auto_leave())
 
     elif len(real_members) > 0:
-        # Someone came back — cancel the auto-leave
         if state.lonely_task and not state.lonely_task.done():
             state.lonely_task.cancel()
             state.lonely_task = None
@@ -645,7 +625,6 @@ async def play(ctx: commands.Context, *, query: str):
     if not ctx.author.voice and (not state.voice_client or not state.voice_client.is_connected()):
         return await ctx.send(embed=embed("❌ Not in Voice", "Join a voice channel first!", "error"))
 
-    # 1. Search YouTube FIRST before touching voice
     msg = await ctx.send(embed=embed("🔍 Searching", f"Looking for `{query}` on YouTube...", "info"))
     track = await fetch_track(query)
     if not track:
@@ -653,14 +632,12 @@ async def play(ctx: commands.Context, *, query: str):
 
     title = track.get("title", "Unknown")
 
-    # 2. Connect to voice with retry logic
     if not state.voice_client or not state.voice_client.is_connected():
         channel = ctx.author.voice.channel
         ok = await safe_connect(channel, state, status_msg=msg)
         if not ok:
             return await msg.edit(embed=embed("❌ Voice Error", "Could not connect after 5 attempts. Try `?join` first.", "error"))
 
-    # 3. Queue or play immediately
     if state.voice_client.is_playing() or state.voice_client.is_paused():
         state.queue.append(track)
         await msg.edit(embed=embed("📋 Added to Queue", f"**{title}** added at position #{len(state.queue)}", "success"))
@@ -670,6 +647,9 @@ async def play(ctx: commands.Context, *, query: str):
         if not stream_url:
             return await msg.edit(embed=embed("❌ Stream Error", f"Could not get audio stream for **{title}**", "error"))
 
+        import time as _t
+        state.track_start_time = _t.time()
+        state.history.append(track)
         await msg.edit(embed=track_embed(track, state))
 
         def after_playing(error):
@@ -720,8 +700,7 @@ async def search(ctx: commands.Context, *, query: str):
         idx = int(reply.content.strip()) - 1
         if 0 <= idx < len(results):
             track = results[idx]
-            ctx_fake = ctx
-            await play(ctx_fake, query=track.get("webpage_url") or track["url"])
+            await play(ctx, query=track.get("webpage_url") or track["url"])
         else:
             await ctx.send(embed=embed("❌ Invalid", "Please enter a valid number.", "error"))
     except (ValueError, asyncio.TimeoutError):
@@ -883,7 +862,6 @@ async def filter_cmd(ctx: commands.Context, preset: str = ""):
     state.audio_filter = preset
     label = AUDIO_FILTERS[preset]["label"]
 
-    # Restart current track with new filter
     if state.voice_client and state.voice_client.is_playing() and state.current:
         stream_url = get_stream_url(state.current)
         if stream_url:
@@ -908,7 +886,6 @@ async def loop(ctx: commands.Context, mode: str = ""):
     state = get_state(ctx.guild.id)
     modes = {"off": "off", "track": "track", "queue": "queue", "song": "track", "t": "track", "q": "queue", "o": "off"}
     if mode.lower() not in modes:
-        # cycle through modes
         cycle = {"off": "track", "track": "queue", "queue": "off"}
         state.loop_mode = cycle.get(state.loop_mode, "off")
     else:
@@ -1010,11 +987,13 @@ async def seek(ctx: commands.Context, seconds: int):
     if not state.current:
         return await ctx.send(embed=embed("❌ Nothing Playing", "No track is playing.", "error"))
     track = state.current
-    stream_url = track.get("url", "")
+    stream_url = get_stream_url(track)
     if not stream_url:
         return await ctx.send(embed=embed("❌ Cannot Seek", "Seeking not supported for this track.", "error"))
 
-    opts = {**FFMPEG_OPTS, "before_options": f"-ss {seconds} " + FFMPEG_OPTS["before_options"]}
+    # FIX: -ss must come before reconnect flags so FFmpeg seeks at input level
+    before = f"-ss {seconds} " + FFMPEG_BASE_BEFORE
+    opts = {"before_options": before, "options": "-vn -ar 48000"}
     source = discord.PCMVolumeTransformer(discord.FFmpegPCMAudio(stream_url, **opts), volume=state.volume)
 
     def after_playing(error):
@@ -1198,7 +1177,7 @@ async def history_cmd(ctx: commands.Context):
     if not state.history:
         return await ctx.send(embed=embed("📜 No History", "No tracks have been played yet this session.", "info"))
 
-    tracks = list(state.history)[-10:][::-1]  # last 10, newest first
+    tracks = list(state.history)[-10:][::-1]
     desc = ""
     for i, t in enumerate(tracks, 1):
         title = t.get("title", "Unknown")[:45]
@@ -1225,7 +1204,6 @@ async def skipto(ctx: commands.Context, position: int):
     if not 1 <= position <= len(state.queue):
         return await ctx.send(embed=embed("❌ Invalid Position", f"Enter a position between 1 and {len(state.queue)}.", "error"))
 
-    # Remove tracks before the target position
     q_list = list(state.queue)
     state.queue = deque(q_list[position - 1:])
     state.voice_client.stop()
@@ -1263,7 +1241,7 @@ async def info(ctx: commands.Context):
     e.add_field(name="⚡ Shards",    value=str(bot.shard_count or 1),             inline=True)
     e.add_field(name="🐍 Language",  value="Python 3.11",                         inline=True)
     e.add_field(name="📦 Library",   value="discord.py (AutoSharded)",            inline=True)
-    e.add_field(name="🎵 Source",    value="YouTube (192kbps/48kHz)",             inline=True)
+    e.add_field(name="🎵 Source",    value="YouTube (48kHz)",                     inline=True)
     e.add_field(name="🎛️ Effects",   value=f"{len(AUDIO_FILTERS)} presets",       inline=True)
     e.add_field(name="🌙 Features",  value="24/7 • AutoPlay • History • Grab",    inline=True)
     e.set_footer(text=f"✨ Use {PREFIX}help to see all commands")
@@ -1309,24 +1287,24 @@ async def help_cmd(ctx: commands.Context, *, command: str = ""):
             ("`?clearqueue`", "Clear the entire queue"),
         ],
         "⚙️ Settings": [
-            (f"`{PREFIX}volume <1-150>`",    "Set volume"),
+            (f"`{PREFIX}volume <1-150>`",         "Set volume"),
             (f"`{PREFIX}loop [off/track/queue]`", "Set loop mode"),
-            (f"`{PREFIX}filter [preset]`",   "Apply audio effect (bass, nightcore, 8d, vaporwave...)"),
-            (f"`{PREFIX}247`",               "Toggle 24/7 mode (stay in voice forever)"),
-            (f"`{PREFIX}autoplay`",          "Toggle AutoPlay (auto-queue related songs)"),
-            (f"`{PREFIX}join`",              "Join your voice channel"),
-            (f"`{PREFIX}leave`",             "Leave voice channel"),
+            (f"`{PREFIX}filter [preset]`",         "Apply audio effect (bass, nightcore, 8d, vaporwave...)"),
+            (f"`{PREFIX}247`",                     "Toggle 24/7 mode (stay in voice forever)"),
+            (f"`{PREFIX}autoplay`",                "Toggle AutoPlay (auto-queue related songs)"),
+            (f"`{PREFIX}join`",                    "Join your voice channel"),
+            (f"`{PREFIX}leave`",                   "Leave voice channel"),
         ],
         "✨ Extras": [
-            (f"`{PREFIX}grab`",              "DM yourself the current song"),
-            (f"`{PREFIX}history`",           "Show recently played tracks"),
-            (f"`{PREFIX}skipto <pos>`",      "Jump to a queue position"),
+            (f"`{PREFIX}grab`",         "DM yourself the current song"),
+            (f"`{PREFIX}history`",      "Show recently played tracks"),
+            (f"`{PREFIX}skipto <pos>`", "Jump to a queue position"),
         ],
         "ℹ️ Info": [
-            (f"`{PREFIX}ping`",              "Check bot latency & shard"),
-            (f"`{PREFIX}uptime`",            "Show bot uptime"),
-            (f"`{PREFIX}info`",              "Bot information"),
-            (f"`{PREFIX}help [command]`",    "This help menu"),
+            (f"`{PREFIX}ping`",           "Check bot latency & shard"),
+            (f"`{PREFIX}uptime`",         "Show bot uptime"),
+            (f"`{PREFIX}info`",           "Bot information"),
+            (f"`{PREFIX}help [command]`", "This help menu"),
         ],
     }
 
@@ -1346,12 +1324,11 @@ async def help_cmd(ctx: commands.Context, *, command: str = ""):
 import time as _time
 bot._start_time = _time.time()
 
-# ─── Keep-alive web server (prevents Replit from sleeping) ────────────────────
+# ─── Keep-alive web server ────────────────────────────────────────────────────
 
 _keepalive = "--keepalive" in sys.argv
 
 async def run_keepalive():
-    """Tiny HTTP server so UptimeRobot can ping this Replit to keep it awake."""
     from aiohttp import web
 
     async def handle(request):
@@ -1361,7 +1338,7 @@ async def run_keepalive():
     app.router.add_get("/", handle)
     app.router.add_get("/ping", handle)
 
-    port = 8090
+    port = int(os.getenv("PORT", 8090))
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, "0.0.0.0", port)
@@ -1370,7 +1347,6 @@ async def run_keepalive():
     domain = os.getenv("REPLIT_DEV_DOMAIN", "")
     if domain:
         print(f"[Keep-Alive] Server running → https://{domain}/")
-        print(f"[Keep-Alive] Add this URL to UptimeRobot (free) to stay online 24/7!")
     else:
         print(f"[Keep-Alive] Server running on port {port}")
 
