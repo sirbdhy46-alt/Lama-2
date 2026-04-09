@@ -387,7 +387,7 @@ async def fetch_track(query: str) -> dict | None:
             return await fetch_track_soundcloud(query)
 
     if not info:
-        return await fetch_track_soundcloud(query)
+        return await fetch_track_soundcloud(fallback_title or query)
     if "entries" in info:
         entries = [e for e in info["entries"] if e]
         return entries[0] if entries else await fetch_track_soundcloud(query)
