@@ -334,30 +334,63 @@ async def _scrape_youtube_ids(query: str, max_results: int = 1) -> list[str]:
     return []
 
 
-async def fetch_track(query: str) -> dict | None:
+SC_YTDL_OPTS: dict = {
+    "format": "bestaudio/best",
+    "noplaylist": True,
+    "quiet": True,
+    "no_warnings": True,
+    "source_address": "0.0.0.0",
+    "extract_flat": False,
+    "check_formats": False,
+    "nocheckcertificate": True,
+}
+
+async def fetch_track_soundcloud(query: str) -> dict | None:
     loop = asyncio.get_running_loop()
-    opts = {**YTDL_OPTS, "noplaylist": True}
-
-    if not query.startswith("http"):
-        ids = await _scrape_youtube_ids(query, max_results=1)
-        if not ids:
-            print(f"[scrape] no results for: {query}")
-            return None
-        query = f"https://www.youtube.com/watch?v={ids[0]}"
-
-    with yt_dlp.YoutubeDL(opts) as ydl:
+    sc_query = query if "soundcloud.com" in query else f"scsearch1:{query}"
+    print(f"[SoundCloud] Searching: {sc_query[:80]}")
+    with yt_dlp.YoutubeDL(SC_YTDL_OPTS) as ydl:
         try:
             info = await loop.run_in_executor(
-                None, lambda: ydl.extract_info(query, download=False)
+                None, lambda: ydl.extract_info(sc_query, download=False)
             )
         except Exception as e:
-            print(f"[yt-dlp] fetch error: {e}")
+            print(f"[SoundCloud] fetch error: {e}")
             return None
     if not info:
         return None
     if "entries" in info:
         entries = [e for e in info["entries"] if e]
         return entries[0] if entries else None
+    return info
+
+async def fetch_track(query: str) -> dict | None:
+    loop = asyncio.get_running_loop()
+    opts = {**YTDL_OPTS, "noplaylist": True}
+
+    yt_query = query
+    if not query.startswith("http"):
+        ids = await _scrape_youtube_ids(query, max_results=1)
+        if ids:
+            yt_query = f"https://www.youtube.com/watch?v={ids[0]}"
+        else:
+            print(f"[scrape] no YouTube results for: {query} — trying SoundCloud")
+            return await fetch_track_soundcloud(query)
+
+    with yt_dlp.YoutubeDL(opts) as ydl:
+        try:
+            info = await loop.run_in_executor(
+                None, lambda: ydl.extract_info(yt_query, download=False)
+            )
+        except Exception as e:
+            print(f"[yt-dlp] fetch error: {e} — falling back to SoundCloud")
+            return await fetch_track_soundcloud(query)
+
+    if not info:
+        return await fetch_track_soundcloud(query)
+    if "entries" in info:
+        entries = [e for e in info["entries"] if e]
+        return entries[0] if entries else await fetch_track_soundcloud(query)
     return info
 
 
