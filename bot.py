@@ -364,7 +364,7 @@ async def fetch_track(query: str, fallback_title: str | None = None) -> dict | N
         return entries[0] if entries else None
     return info
 
-async def fetch_track(query: str) -> dict | None:
+async def fetch_track(query: str, fallback_title: str | None = None) -> dict | None:
     loop = asyncio.get_running_loop()
     opts = {**YTDL_OPTS, "noplaylist": True}
 
