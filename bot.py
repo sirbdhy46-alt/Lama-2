@@ -33,7 +33,6 @@ def load_opus():
 
     import glob as _glob
 
-    # 1. Known fixed paths (apt libopus0 on Ubuntu/Railway)
     opus_names = [
         "libopus.so.0",
         "/usr/lib/x86_64-linux-gnu/libopus.so.0",
@@ -53,7 +52,6 @@ def load_opus():
         except OSError:
             continue
 
-    # 2. ctypes discovery (works if library is in ldconfig cache)
     lib = ctypes.util.find_library("opus")
     if lib:
         try:
@@ -63,7 +61,6 @@ def load_opus():
         except OSError:
             pass
 
-    # 3. Glob search — finds opus anywhere on the system, including Nix store
     patterns = [
         "/usr/lib/**/libopus.so*",
         "/usr/local/lib/**/libopus.so*",
@@ -98,7 +95,7 @@ class GuildMusicState:
     def __init__(self):
         self.queue: deque = deque()
         self.current = None
-        self.loop_mode = "off"          # off | track | queue
+        self.loop_mode = "off"
         self.volume = 0.5
         self.voice_client: discord.VoiceClient | None = None
         self.text_channel: discord.TextChannel | None = None
@@ -109,6 +106,7 @@ class GuildMusicState:
         self.autoplay = False
         self.track_start_time: float = 0.0
         self.lonely_task: asyncio.Task | None = None
+        self.source_pref = "youtube"  # "youtube" | "soundcloud" | "jiosaavn"
 
 guild_states: dict[int, GuildMusicState] = {}
 
@@ -148,13 +146,7 @@ def _setup_cookies() -> str | None:
 
 _COOKIE_FILE = _setup_cookies()
 
-# ─── YTDLP / YouTube config ───────────────────────────────────────────────
-# Railway is a datacenter IP. Even with cookies, the YouTube "web" client
-# returns a restricted format manifest for datacenter IPs.
-# Fix: use the "ios" client which hits a different API endpoint and is not
-# subject to the same IP-based format restrictions. Also use "bestaudio/best"
-# (no container filter) and check_formats=False so yt-dlp never rejects a
-# format that the server claims is available.
+# ─── YouTube config ───────────────────────────────────────────────────────
 
 _ytdl_base: dict = {
     "format": "bestaudio/best",
@@ -179,7 +171,7 @@ if _COOKIE_FILE:
 
 YTDL_OPTS = _ytdl_base
 
-# ─── SoundCloud config (fallback) ────────────────────────────────────────
+# ─── SoundCloud config ────────────────────────────────────────────────────
 
 SC_YTDL_OPTS: dict = {
     "format": "bestaudio/best",
@@ -192,38 +184,25 @@ SC_YTDL_OPTS: dict = {
     "nocheckcertificate": True,
 }
 
-async def fetch_track_soundcloud(query: str) -> dict | None:
-    import re as _re2
-    if (not query
-            or "youtube.com" in query
-            or "youtu.be" in query
-            or _re2.match(r'^[a-zA-Z0-9_-]{11}$', query)):
-        print(f"[SoundCloud] Skipping — no valid title to search: {query[:40]}")
-        return None
-    loop = asyncio.get_running_loop()
-    sc_query = query if "soundcloud.com" in query else f"scsearch1:{query}"
-    print(f"[SoundCloud] Searching: {sc_query[:80]}")
-    with yt_dlp.YoutubeDL(SC_YTDL_OPTS) as ydl:
-        try:
-            info = await loop.run_in_executor(
-                None, lambda: ydl.extract_info(sc_query, download=False)
-            )
-        except Exception as e:
-            print(f"[SoundCloud] fetch error: {e}")
-            return None
-    if not info:
-        return None
-    if "entries" in info:
-        entries = [e for e in info["entries"] if e]
-        return entries[0] if entries else None
-    return info
+# ─── JioSaavn config ──────────────────────────────────────────────────────
 
-# FIX: Removed -b:a 192k — forcing a specific bitrate can cause FFmpeg to
-# fail or stutter when the stream's native bitrate doesn't match.
+JS_YTDL_OPTS: dict = {
+    "format": "bestaudio/best",
+    "noplaylist": True,
+    "quiet": True,
+    "no_warnings": True,
+    "source_address": "0.0.0.0",
+    "extract_flat": False,
+    "check_formats": False,
+    "nocheckcertificate": True,
+}
+
+# ─── FFmpeg config ────────────────────────────────────────────────────────
+
 FFMPEG_BASE_BEFORE = "-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5"
 FFMPEG_OPTS = {
     "before_options": FFMPEG_BASE_BEFORE,
-    "options": "-vn -ar 48000",
+    "options": "-vn -ar 48000 -ac 2 -f s16le",
 }
 
 # ─── Audio filter presets ──────────────────────────────────────────────────
@@ -245,7 +224,7 @@ AUDIO_FILTERS = {
 
 def build_ffmpeg_opts(audio_filter: str) -> dict:
     af = AUDIO_FILTERS.get(audio_filter, AUDIO_FILTERS["off"])["af"]
-    options = "-vn -ar 48000"
+    options = "-vn -ar 48000 -ac 2 -f s16le"
     if af:
         options += f" -af \"{af}\""
     return {
@@ -272,6 +251,8 @@ _YT_SEARCH_HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
     "Accept-Language": "en-US,en;q=0.9",
 }
+
+# ─── Search helpers ───────────────────────────────────────────────────────
 
 async def _search_with_ytdlp(query: str, max_results: int) -> list[str]:
     opts = {
@@ -341,24 +322,20 @@ async def _scrape_youtube_ids(query: str, max_results: int = 1) -> list[str]:
     return []
 
 
-SC_YTDL_OPTS: dict = {
-    "format": "bestaudio/best",
-    "noplaylist": True,
-    "quiet": True,
-    "no_warnings": True,
-    "source_address": "0.0.0.0",
-    "extract_flat": False,
-    "check_formats": False,
-    "nocheckcertificate": True,
-}
+# ─── Track fetchers ───────────────────────────────────────────────────────
+
+def _is_yt_id_or_url(query: str) -> bool:
+    return (
+        not query
+        or "youtube.com" in query
+        or "youtu.be" in query
+        or bool(_re.match(r'^[a-zA-Z0-9_-]{11}$', query))
+    )
+
 
 async def fetch_track_soundcloud(query: str) -> dict | None:
-    import re as _re2
-    if (not query
-            or "youtube.com" in query
-            or "youtu.be" in query
-            or _re2.match(r'^[a-zA-Z0-9_-]{11}$', query)):
-        print(f"[SoundCloud] Skipping — no valid title to search: {query[:40]}")
+    if _is_yt_id_or_url(query):
+        print(f"[SoundCloud] Skipping — no valid title: {query[:40]}")
         return None
     loop = asyncio.get_running_loop()
     sc_query = query if "soundcloud.com" in query else f"scsearch1:{query}"
@@ -378,18 +355,63 @@ async def fetch_track_soundcloud(query: str) -> dict | None:
         return entries[0] if entries else None
     return info
 
-async def fetch_track(query: str, fallback_title: str | None = None) -> dict | None:
-    loop = asyncio.get_running_loop()
-    opts = {**YTDL_OPTS, "noplaylist": True}
 
+async def fetch_track_jiosaavn(query: str) -> dict | None:
+    if _is_yt_id_or_url(query):
+        print(f"[JioSaavn] Skipping — no valid title: {query[:40]}")
+        return None
+    loop = asyncio.get_running_loop()
+    js_query = query if "jiosaavn.com" in query else f"jssearch1:{query}"
+    print(f"[JioSaavn] Searching: {js_query[:80]}")
+    with yt_dlp.YoutubeDL(JS_YTDL_OPTS) as ydl:
+        try:
+            info = await loop.run_in_executor(
+                None, lambda: ydl.extract_info(js_query, download=False)
+            )
+        except Exception as e:
+            print(f"[JioSaavn] fetch error: {e}")
+            return None
+    if not info:
+        return None
+    if "entries" in info:
+        entries = [e for e in info["entries"] if e]
+        return entries[0] if entries else None
+    return info
+
+
+async def _fallback_fetch(title: str) -> dict | None:
+    result = await fetch_track_jiosaavn(title)
+    if result:
+        return result
+    return await fetch_track_soundcloud(title)
+
+
+async def fetch_track(query: str, fallback_title: str | None = None, source_pref: str = "youtube") -> dict | None:
+    loop = asyncio.get_running_loop()
+    title = fallback_title or (query if not _is_yt_id_or_url(query) else None)
+
+    if source_pref == "soundcloud":
+        if title:
+            return await fetch_track_soundcloud(title)
+        return None
+
+    if source_pref == "jiosaavn":
+        if title:
+            result = await fetch_track_jiosaavn(title)
+            if result:
+                return result
+            return await fetch_track_soundcloud(title)
+        return None
+
+    opts = {**YTDL_OPTS, "noplaylist": True}
     yt_query = query
     if not query.startswith("http"):
         ids = await _scrape_youtube_ids(query, max_results=1)
         if ids:
             yt_query = f"https://www.youtube.com/watch?v={ids[0]}"
         else:
-            print(f"[scrape] no YouTube results for: {query} — trying SoundCloud")
-            return await fetch_track_soundcloud(fallback_title or query)
+            print(f"[scrape] no YouTube results for: {query} — trying fallback")
+            return await _fallback_fetch(title or query)
 
     with yt_dlp.YoutubeDL(opts) as ydl:
         try:
@@ -397,14 +419,14 @@ async def fetch_track(query: str, fallback_title: str | None = None) -> dict | N
                 None, lambda: ydl.extract_info(yt_query, download=False)
             )
         except Exception as e:
-            print(f"[yt-dlp] fetch error: {e} — falling back to SoundCloud")
-            return await fetch_track_soundcloud(fallback_title or query)
+            print(f"[yt-dlp] fetch error: {e} — falling back")
+            return await _fallback_fetch(title or query)
 
     if not info:
-        return await fetch_track_soundcloud(fallback_title or query)
+        return await _fallback_fetch(title or query)
     if "entries" in info:
         entries = [e for e in info["entries"] if e]
-        return entries[0] if entries else await fetch_track_soundcloud(query)
+        return entries[0] if entries else await _fallback_fetch(title or query)
     return info
 
 
@@ -482,20 +504,23 @@ def track_embed(track: dict, state: GuildMusicState, label: str = "🎵 Now Play
     loop_icons = {"off": "➡️ Off", "track": "🔂 Track", "queue": "🔁 Queue"}
     elapsed = _t.time() - state.track_start_time if state.track_start_time else 0
 
+    source_icons = {"youtube": "▶️ YouTube", "soundcloud": "☁️ SoundCloud", "jiosaavn": "🎵 JioSaavn"}
+
     e = discord.Embed(
         title=label,
         description=f"**[{title}]({url})**\n{make_progress_bar(elapsed, duration)}",
         color=COLORS["main"],
     )
-    e.add_field(name="🎤 Artist",  value=uploader,                                  inline=True)
-    e.add_field(name="⏱️ Duration", value=f"{mins}:{secs:02d}",                     inline=True)
-    e.add_field(name="🔊 Volume",  value=f"{int(state.volume * 100)}%",             inline=True)
-    e.add_field(name="🔁 Loop",    value=loop_icons.get(state.loop_mode, "➡️ Off"), inline=True)
-    e.add_field(name="📋 Queue",   value=f"{len(state.queue)} tracks",              inline=True)
+    e.add_field(name="🎤 Artist",   value=uploader,                                   inline=True)
+    e.add_field(name="⏱️ Duration", value=f"{mins}:{secs:02d}",                      inline=True)
+    e.add_field(name="🔊 Volume",   value=f"{int(state.volume * 100)}%",              inline=True)
+    e.add_field(name="🔁 Loop",     value=loop_icons.get(state.loop_mode, "➡️ Off"), inline=True)
+    e.add_field(name="📋 Queue",    value=f"{len(state.queue)} tracks",               inline=True)
     filter_label = AUDIO_FILTERS.get(state.audio_filter, AUDIO_FILTERS["off"])["label"]
-    e.add_field(name="🎛️ Effect",  value=filter_label,                              inline=True)
+    e.add_field(name="🎛️ Effect",   value=filter_label,                               inline=True)
     mode_str = "🌙 24/7" if state.stay_247 else ("🤖 AutoPlay" if state.autoplay else "▶️ Normal")
-    e.add_field(name="📡 Mode",    value=mode_str,                                  inline=True)
+    e.add_field(name="📡 Mode",     value=mode_str,                                   inline=True)
+    e.add_field(name="🎙️ Source",   value=source_icons.get(state.source_pref, "▶️ YouTube"), inline=True)
     if thumbnail:
         e.set_thumbnail(url=thumbnail)
     e.set_footer(text="✨ Premium Music • 48kHz")
@@ -576,12 +601,17 @@ async def play_next(guild_id: int):
         if state.text_channel:
             await state.text_channel.send(embed=embed("⏹️ Queue finished", "Nothing more to play. Add tracks with `?play`!", "info"))
         await bot.change_presence(activity=discord.Activity(
-            type=discord.ActivityType.listening, name=f"{PREFIX}help | YouTube 🎵"
+            type=discord.ActivityType.listening, name=f"{PREFIX}help | Music 🎵"
         ))
         return
 
     page_url = track.get("webpage_url") or track.get("url", "")
-    fresh = await fetch_track(page_url, fallback_title=track.get("title")) if page_url else None
+    fresh = await fetch_track(
+        page_url,
+        fallback_title=track.get("title"),
+        source_pref=state.source_pref
+    ) if page_url else None
+
     if not fresh:
         if state.text_channel:
             await state.text_channel.send(embed=embed("⚠️ Skipped", f"Could not stream **{track.get('title', '?')}**", "warn"))
@@ -628,7 +658,7 @@ async def on_ready():
     shard_info = f" [{bot.shard_count} shard(s)]" if bot.shard_count else ""
     print(f"🎵 {bot.user} is online and ready to drop beats!{shard_info}")
     await bot.change_presence(
-        activity=discord.Activity(type=discord.ActivityType.listening, name=f"{PREFIX}help | YouTube 🎵")
+        activity=discord.Activity(type=discord.ActivityType.listening, name=f"{PREFIX}help | Music 🎵")
     )
 
 @bot.event
@@ -675,7 +705,7 @@ async def on_voice_state_update(member: discord.Member, before: discord.VoiceSta
                             "info"
                         ))
                     await bot.change_presence(activity=discord.Activity(
-                        type=discord.ActivityType.listening, name=f"{PREFIX}help | YouTube 🎵"
+                        type=discord.ActivityType.listening, name=f"{PREFIX}help | Music 🎵"
                     ))
 
         state.lonely_task = asyncio.create_task(auto_leave())
@@ -721,15 +751,17 @@ async def leave(ctx: commands.Context):
 @bot.command(name="play", aliases=["p"])
 @commands.guild_only()
 async def play(ctx: commands.Context, *, query: str):
-    """Play a song from YouTube (search or URL)."""
+    """Play a song (search or URL)."""
     state = get_state(ctx.guild.id)
     state.text_channel = ctx.channel
 
     if not ctx.author.voice and (not state.voice_client or not state.voice_client.is_connected()):
         return await ctx.send(embed=embed("❌ Not in Voice", "Join a voice channel first!", "error"))
 
-    msg = await ctx.send(embed=embed("🔍 Searching", f"Looking for `{query}` on YouTube...", "info"))
-    track = await fetch_track(query)
+    source_labels = {"youtube": "YouTube", "soundcloud": "SoundCloud", "jiosaavn": "JioSaavn"}
+    src = source_labels.get(state.source_pref, "YouTube")
+    msg = await ctx.send(embed=embed("🔍 Searching", f"Looking for `{query}` on {src}...", "info"))
+    track = await fetch_track(query, source_pref=state.source_pref)
     if not track:
         return await msg.edit(embed=embed("❌ Not Found", f"No results for `{query}`", "error"))
 
@@ -765,11 +797,59 @@ async def play(ctx: commands.Context, *, query: str):
         state.skip_votes.clear()
 
 
+@bot.command(name="source", aliases=["src"])
+@commands.guild_only()
+async def set_source(ctx: commands.Context, choice: str = ""):
+    """Switch music source: youtube, soundcloud, jiosaavn."""
+    state = get_state(ctx.guild.id)
+    choice = choice.lower()
+
+    valid = {
+        "youtube": "youtube", "yt": "youtube",
+        "soundcloud": "soundcloud", "sc": "soundcloud",
+        "jiosaavn": "jiosaavn", "jio": "jiosaavn", "saavn": "jiosaavn",
+    }
+
+    if choice not in valid:
+        icons = {"youtube": "▶️ YouTube", "soundcloud": "☁️ SoundCloud", "jiosaavn": "🎵 JioSaavn"}
+        current = icons.get(state.source_pref, "▶️ YouTube")
+        await ctx.send(embed=embed(
+            "🎙️ Music Source",
+            f"Current source: **{current}**\n\n"
+            "Use one of:\n"
+            "`?source youtube` — YouTube (best quality, may fail on Railway)\n"
+            "`?source soundcloud` — SoundCloud (reliable, 128kbps)\n"
+            "`?source jiosaavn` — JioSaavn (great for Indian music, 320kbps)",
+            "info"
+        ))
+        return
+
+    state.source_pref = valid[choice]
+    labels = {"youtube": "▶️ YouTube", "soundcloud": "☁️ SoundCloud", "jiosaavn": "🎵 JioSaavn"}
+    label = labels[state.source_pref]
+    await ctx.send(embed=embed("🎙️ Source Updated", f"Now streaming from **{label}**!", "success"))
+
+
 @bot.command(name="playsc", aliases=["sc"])
 @commands.guild_only()
 async def playsc(ctx: commands.Context, *, query: str):
-    """Force search on YouTube (same as ?play)."""
+    """Force play from SoundCloud."""
+    state = get_state(ctx.guild.id)
+    old_pref = state.source_pref
+    state.source_pref = "soundcloud"
     await play(ctx, query=query)
+    state.source_pref = old_pref
+
+
+@bot.command(name="playjio", aliases=["jio"])
+@commands.guild_only()
+async def playjio(ctx: commands.Context, *, query: str):
+    """Force play from JioSaavn."""
+    state = get_state(ctx.guild.id)
+    old_pref = state.source_pref
+    state.source_pref = "jiosaavn"
+    await play(ctx, query=query)
+    state.source_pref = old_pref
 
 
 @bot.command(name="search", aliases=["find", "lookup"])
@@ -1067,7 +1147,7 @@ async def playnext(ctx: commands.Context, *, query: str):
             return await ctx.send(embed=embed("❌ Not in Voice", "Join a voice channel first!", "error"))
         state.voice_client = await ctx.author.voice.channel.connect()
 
-    msg = await ctx.send(embed=embed("🔍 Searching", f"Looking for `{query}` on YouTube...", "info"))
+    msg = await ctx.send(embed=embed("🔍 Searching", f"Looking for `{query}`...", "info"))
     results = await search_youtube(query, max_results=1)
     if not results:
         return await msg.edit(embed=embed("❌ Not Found", f"No results for `{query}`", "error"))
@@ -1094,9 +1174,8 @@ async def seek(ctx: commands.Context, seconds: int):
     if not stream_url:
         return await ctx.send(embed=embed("❌ Cannot Seek", "Seeking not supported for this track.", "error"))
 
-    # FIX: -ss must come before reconnect flags so FFmpeg seeks at input level
     before = f"-ss {seconds} " + FFMPEG_BASE_BEFORE
-    opts = {"before_options": before, "options": "-vn -ar 48000"}
+    opts = {"before_options": before, "options": "-vn -ar 48000 -ac 2 -f s16le"}
     source = discord.PCMVolumeTransformer(discord.FFmpegPCMAudio(stream_url, **opts), volume=state.volume)
 
     def after_playing(error):
@@ -1337,14 +1416,14 @@ async def uptime_cmd(ctx: commands.Context):
 async def info(ctx: commands.Context):
     """Show bot information."""
     e = discord.Embed(title="🎵 Premium Music Bot", color=COLORS["main"])
-    e.description = "A premium YouTube-powered music bot built for any server size!\n\nPowered by **YouTube** via yt-dlp • Auto-sharded for 100k+ member servers."
+    e.description = "A premium music bot supporting YouTube, SoundCloud & JioSaavn!\n\nAuto-sharded for 100k+ member servers."
     e.add_field(name="🎤 Prefix",    value=f"`{PREFIX}`",                         inline=True)
     e.add_field(name="🖥️ Servers",   value=str(len(bot.guilds)),                  inline=True)
     e.add_field(name="📡 Latency",   value=f"{round(bot.latency * 1000)}ms",      inline=True)
     e.add_field(name="⚡ Shards",    value=str(bot.shard_count or 1),             inline=True)
     e.add_field(name="🐍 Language",  value="Python 3.11",                         inline=True)
     e.add_field(name="📦 Library",   value="discord.py (AutoSharded)",            inline=True)
-    e.add_field(name="🎵 Source",    value="YouTube (48kHz)",                     inline=True)
+    e.add_field(name="🎵 Sources",   value="YouTube • SoundCloud • JioSaavn",     inline=True)
     e.add_field(name="🎛️ Effects",   value=f"{len(AUDIO_FILTERS)} presets",       inline=True)
     e.add_field(name="🌙 Features",  value="24/7 • AutoPlay • History • Grab",    inline=True)
     e.set_footer(text=f"✨ Use {PREFIX}help to see all commands")
@@ -1365,43 +1444,46 @@ async def help_cmd(ctx: commands.Context, *, command: str = ""):
 
     categories = {
         "🎵 Playback": [
-            ("`?play <query>`", "Play from YouTube (search or URL)"),
-            ("`?playnext <query>`", "Add to front of queue"),
-            ("`?playlist <url>`", "Load a YouTube playlist"),
-            ("`?pause`", "Pause the current track"),
-            ("`?resume`", "Resume playback"),
-            ("`?stop`", "Stop and clear queue"),
-            ("`?skip`", "Vote to skip current track"),
-            ("`?forceskip`", "Force skip (Manage Server perm)"),
-            ("`?seek <seconds>`", "Seek to position in track"),
-            ("`?replay`", "Restart current track"),
+            ("`?play <query>`",      "Play from YouTube/SoundCloud/JioSaavn"),
+            ("`?playsc <query>`",    "Force play from SoundCloud"),
+            ("`?playjio <query>`",   "Force play from JioSaavn"),
+            ("`?playnext <query>`",  "Add to front of queue"),
+            ("`?playlist <url>`",    "Load a YouTube playlist"),
+            ("`?pause`",             "Pause the current track"),
+            ("`?resume`",            "Resume playback"),
+            ("`?stop`",              "Stop and clear queue"),
+            ("`?skip`",              "Vote to skip current track"),
+            ("`?forceskip`",         "Force skip (Manage Server perm)"),
+            ("`?seek <seconds>`",    "Seek to position in track"),
+            ("`?replay`",            "Restart current track"),
         ],
         "🔍 Discovery": [
-            ("`?search <query>`", "Search YouTube & pick from results"),
-            ("`?radio <genre>`", "Play genre radio (lofi, edm, pop, jazz...)"),
-            ("`?lyrics [song]`", "Fetch song lyrics"),
+            ("`?search <query>`",    "Search YouTube & pick from results"),
+            ("`?radio <genre>`",     "Play genre radio (lofi, edm, pop, jazz...)"),
+            ("`?lyrics [song]`",     "Fetch song lyrics"),
         ],
         "📋 Queue": [
-            ("`?queue`", "View the current queue"),
-            ("`?nowplaying`", "See what's currently playing"),
-            ("`?shuffle`", "Shuffle the queue"),
-            ("`?remove <pos>`", "Remove track by position"),
-            ("`?move <from> <to>`", "Move track in queue"),
-            ("`?clearqueue`", "Clear the entire queue"),
+            ("`?queue`",             "View the current queue"),
+            ("`?nowplaying`",        "See what's currently playing"),
+            ("`?shuffle`",           "Shuffle the queue"),
+            ("`?remove <pos>`",      "Remove track by position"),
+            ("`?move <from> <to>`",  "Move track in queue"),
+            ("`?clearqueue`",        "Clear the entire queue"),
+            ("`?skipto <pos>`",      "Jump to a queue position"),
         ],
         "⚙️ Settings": [
-            (f"`{PREFIX}volume <1-150>`",         "Set volume"),
-            (f"`{PREFIX}loop [off/track/queue]`", "Set loop mode"),
-            (f"`{PREFIX}filter [preset]`",         "Apply audio effect (bass, nightcore, 8d, vaporwave...)"),
-            (f"`{PREFIX}247`",                     "Toggle 24/7 mode (stay in voice forever)"),
-            (f"`{PREFIX}autoplay`",                "Toggle AutoPlay (auto-queue related songs)"),
-            (f"`{PREFIX}join`",                    "Join your voice channel"),
-            (f"`{PREFIX}leave`",                   "Leave voice channel"),
+            (f"`{PREFIX}source [yt/sc/jio]`",         "Switch music source (YouTube/SoundCloud/JioSaavn)"),
+            (f"`{PREFIX}volume <1-150>`",              "Set volume"),
+            (f"`{PREFIX}loop [off/track/queue]`",      "Set loop mode"),
+            (f"`{PREFIX}filter [preset]`",             "Apply audio effect (bass, nightcore, 8d...)"),
+            (f"`{PREFIX}247`",                         "Toggle 24/7 mode"),
+            (f"`{PREFIX}autoplay`",                    "Toggle AutoPlay"),
+            (f"`{PREFIX}join`",                        "Join your voice channel"),
+            (f"`{PREFIX}leave`",                       "Leave voice channel"),
         ],
         "✨ Extras": [
             (f"`{PREFIX}grab`",         "DM yourself the current song"),
             (f"`{PREFIX}history`",      "Show recently played tracks"),
-            (f"`{PREFIX}skipto <pos>`", "Jump to a queue position"),
         ],
         "ℹ️ Info": [
             (f"`{PREFIX}ping`",           "Check bot latency & shard"),
@@ -1413,13 +1495,13 @@ async def help_cmd(ctx: commands.Context, *, command: str = ""):
 
     e = discord.Embed(
         title="🎵 Premium Music Bot — Command Help",
-        description=f"Prefix: **`{PREFIX}`** | Powered by **YouTube** 🎵\nUse `?help <command>` for details on any command.",
+        description=f"Prefix: **`{PREFIX}`** | Sources: YouTube • SoundCloud • JioSaavn\nUse `?help <command>` for details on any command.",
         color=COLORS["main"],
     )
     for cat, cmds in categories.items():
         val = "\n".join([f"{c[0]} — {c[1]}" for c in cmds])
         e.add_field(name=cat, value=val, inline=False)
-    e.set_footer(text="✨ Premium Music Bot • YouTube Powered")
+    e.set_footer(text="✨ Premium Music Bot • Multi-Source")
     await ctx.send(embed=e)
 
 
