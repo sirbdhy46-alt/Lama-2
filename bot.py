@@ -179,6 +179,38 @@ if _COOKIE_FILE:
 
 YTDL_OPTS = _ytdl_base
 
+# ─── SoundCloud config (fallback) ────────────────────────────────────────
+
+SC_YTDL_OPTS: dict = {
+    "format": "bestaudio/best",
+    "noplaylist": True,
+    "quiet": True,
+    "no_warnings": True,
+    "source_address": "0.0.0.0",
+    "extract_flat": False,
+    "check_formats": False,
+    "nocheckcertificate": True,
+}
+
+async def fetch_track_soundcloud(query: str) -> dict | None:
+    loop = asyncio.get_running_loop()
+    sc_query = query if query.startswith("http://soundcloud.com") or query.startswith("https://soundcloud.com") else f"scsearch1:{query}"
+    print(f"[SoundCloud] Searching: {sc_query[:80]}")
+    with yt_dlp.YoutubeDL(SC_YTDL_OPTS) as ydl:
+        try:
+            info = await loop.run_in_executor(
+                None, lambda: ydl.extract_info(sc_query, download=False)
+            )
+        except Exception as e:
+            print(f"[SoundCloud] fetch error: {e}")
+            return None
+    if not info:
+        return None
+    if "entries" in info:
+        entries = [e for e in info["entries"] if e]
+        return entries[0] if entries else None
+    return info
+
 # FIX: Removed -b:a 192k — forcing a specific bitrate can cause FFmpeg to
 # fail or stutter when the stream's native bitrate doesn't match.
 FFMPEG_BASE_BEFORE = "-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5"
