@@ -1,5 +1,7 @@
 [phases.setup]
-aptPkgs = ["ffmpeg", "libopus0", "libopus-dev"]
+nixPkgs = ["ffmpeg", "libopus"]
+aptPkgs = ["libopus0", "libopus-dev"]
 
 [start]
 cmd = "python launcher.py"
+
