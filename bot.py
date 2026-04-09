@@ -170,7 +170,7 @@ _ytdl_base: dict = {
     "geo_bypass": True,
     "extractor_args": {
         "youtube": {
-            "player_client": ["tv_embedded", "android_music"],
+            "player_client": ["android_music", "tv_embedded"],
             "skip": ["dash", "hls"],
         }
     },
