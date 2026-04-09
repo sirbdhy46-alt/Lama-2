@@ -168,10 +168,9 @@ _ytdl_base: dict = {
     "check_formats": False,
     "nocheckcertificate": True,
     "geo_bypass": True,
-    "extractor_args": {
+        "extractor_args": {
         "youtube": {
-            "player_client": ["android_music", "tv_embedded"],
-            "skip": ["dash", "hls"],
+            "player_client": ["ios", "android_music"],
         }
     },
     "http_headers": {
