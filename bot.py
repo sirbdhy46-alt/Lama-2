@@ -157,25 +157,20 @@ _COOKIE_FILE = _setup_cookies()
 # format that the server claims is available.
 
 _ytdl_base: dict = {
-    "format": "bestaudio[ext=webm]/bestaudio[ext=opus]/bestaudio[ext=m4a]/bestaudio/best",
+    "format": "bestaudio/best",
     "noplaylist": True,
     "quiet": True,
     "no_warnings": True,
     "default_search": "ytsearch",
     "source_address": "0.0.0.0",
     "extract_flat": False,
-    "prefer_free_formats": True,
     "check_formats": False,
     "nocheckcertificate": True,
     "geo_bypass": True,
-        "extractor_args": {
+    "extractor_args": {
         "youtube": {
-            "player_client": ["ios", "android_music"],
+            "player_client": ["ios"],
         }
-    },
-    "http_headers": {
-        "User-Agent": "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.6367.82 Mobile Safari/537.36",
-        "Accept-Language": "en-US,en;q=0.9",
     },
 }
 
