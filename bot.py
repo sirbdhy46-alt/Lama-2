@@ -87,7 +87,7 @@ class GuildMusicState:
         self.lonely_task: asyncio.Task | None = None
 
 guild_states: dict[int, GuildMusicState] = {}
-ju
+
 def get_state(guild_id: int) -> GuildMusicState:
     if guild_id not in guild_states:
         guild_states[guild_id] = GuildMusicState()
