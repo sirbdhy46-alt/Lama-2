@@ -193,8 +193,15 @@ SC_YTDL_OPTS: dict = {
 }
 
 async def fetch_track_soundcloud(query: str) -> dict | None:
+    import re as _re2
+    if (not query
+            or "youtube.com" in query
+            or "youtu.be" in query
+            or _re2.match(r'^[a-zA-Z0-9_-]{11}$', query)):
+        print(f"[SoundCloud] Skipping — no valid title to search: {query[:40]}")
+        return None
     loop = asyncio.get_running_loop()
-    sc_query = query if query.startswith("http://soundcloud.com") or query.startswith("https://soundcloud.com") else f"scsearch1:{query}"
+    sc_query = query if "soundcloud.com" in query else f"scsearch1:{query}"
     print(f"[SoundCloud] Searching: {sc_query[:80]}")
     with yt_dlp.YoutubeDL(SC_YTDL_OPTS) as ydl:
         try:
@@ -345,7 +352,14 @@ SC_YTDL_OPTS: dict = {
     "nocheckcertificate": True,
 }
 
-async def fetch_track(query: str, fallback_title: str | None = None) -> dict | None:
+async def fetch_track_soundcloud(query: str) -> dict | None:
+    import re as _re2
+    if (not query
+            or "youtube.com" in query
+            or "youtu.be" in query
+            or _re2.match(r'^[a-zA-Z0-9_-]{11}$', query)):
+        print(f"[SoundCloud] Skipping — no valid title to search: {query[:40]}")
+        return None
     loop = asyncio.get_running_loop()
     sc_query = query if "soundcloud.com" in query else f"scsearch1:{query}"
     print(f"[SoundCloud] Searching: {sc_query[:80]}")
