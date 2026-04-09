@@ -345,7 +345,7 @@ SC_YTDL_OPTS: dict = {
     "nocheckcertificate": True,
 }
 
-async def fetch_track_soundcloud(query: str) -> dict | None:
+async def fetch_track(query: str, fallback_title: str | None = None) -> dict | None:
     loop = asyncio.get_running_loop()
     sc_query = query if "soundcloud.com" in query else f"scsearch1:{query}"
     print(f"[SoundCloud] Searching: {sc_query[:80]}")
